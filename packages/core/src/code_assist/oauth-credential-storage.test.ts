@@ -28,12 +28,18 @@ vi.mock('node:fs', () => ({
     readFile: vi.fn(),
     rm: vi.fn(),
   },
+  createWriteStream: vi.fn(() => ({
+    on: vi.fn(),
+    write: vi.fn(),
+    end: vi.fn(),
+  })),
 }));
 vi.mock('node:os');
 vi.mock('node:path');
 vi.mock('../utils/events.js', () => ({
   coreEvents: {
     emitFeedback: vi.fn(),
+    emitConsoleLog: vi.fn(),
   },
 }));
 

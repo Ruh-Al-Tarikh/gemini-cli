@@ -11,10 +11,30 @@ import type {
   InProcessCheckerConfig,
   ExternalCheckerConfig,
 } from '../policy/types.js';
-import type { SafetyCheckInput, SafetyCheckResult } from './protocol.js';
-import { SafetyCheckDecision } from './protocol.js';
+import {
+  SafetyCheckDecision,
+  type SafetyCheckInput,
+  type SafetyCheckResult,
+} from './protocol.js';
 import type { CheckerRegistry } from './registry.js';
 import type { ContextBuilder } from './context-builder.js';
+import { z } from 'zod';
+
+const SafetyCheckResultSchema: z.ZodType<SafetyCheckResult> =
+  z.discriminatedUnion('decision', [
+    z.object({
+      decision: z.literal(SafetyCheckDecision.ALLOW),
+      reason: z.string().optional(),
+    }),
+    z.object({
+      decision: z.literal(SafetyCheckDecision.DENY),
+      reason: z.string().min(1),
+    }),
+    z.object({
+      decision: z.literal(SafetyCheckDecision.ASK_USER),
+      reason: z.string().min(1),
+    }),
+  ]);
 
 /**
  * Configuration for the checker runner.
@@ -212,17 +232,9 @@ export class CheckerRunner {
 
         // Try to parse the output
         try {
-          const result: SafetyCheckResult = JSON.parse(stdout);
-
-          // Validate the result structure
-          if (
-            !result.decision ||
-            !Object.values(SafetyCheckDecision).includes(result.decision)
-          ) {
-            throw new Error(
-              'Invalid result: missing or invalid "decision" field',
-            );
-          }
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          const rawResult = JSON.parse(stdout);
+          const result = SafetyCheckResultSchema.parse(rawResult);
 
           resolve(result);
         } catch (parseError) {

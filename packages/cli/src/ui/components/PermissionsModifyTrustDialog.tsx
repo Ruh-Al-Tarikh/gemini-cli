@@ -66,15 +66,20 @@ export function PermissionsModifyTrustDialog({
     (key) => {
       if (key.name === 'escape') {
         onExit();
+        return true;
       }
       if (needsRestart && key.name === 'r') {
-        const success = commitTrustLevelChange();
-        if (success) {
-          relaunchApp();
-        } else {
-          onExit();
-        }
+        void (async () => {
+          const success = await commitTrustLevelChange();
+          if (success) {
+            void relaunchApp();
+          } else {
+            onExit();
+          }
+        })();
+        return true;
       }
+      return false;
     },
     { isActive: true },
   );

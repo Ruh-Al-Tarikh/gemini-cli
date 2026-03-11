@@ -16,6 +16,7 @@ on:
 
 jobs:
   build:
+    if: "github.repository == 'google-gemini/gemini-cli'"
     runs-on: 'ubuntu-latest'
     permissions:
       contents: 'read'
@@ -46,4 +47,4 @@ jobs:
           gh issue create \
             --title 'Sandbox Release Failed on $(date +'%Y-%m-%d')' \
             --body 'The sandbox-release workflow failed. See the full run for details: ${DETAILS_URL}' \
-            --label 'kind/bug,release-failure,priority/p0'
+            --label 'release-failure,priority/p0'

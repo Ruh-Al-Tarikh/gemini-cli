@@ -4,16 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-const EstimatedArtWidth = 59;
-const BoxBorderWidth = 1;
-export const BOX_PADDING_X = 1;
-
-// Calculate width based on art, padding, and border
-export const UI_WIDTH =
-  EstimatedArtWidth + BOX_PADDING_X * 2 + BoxBorderWidth * 2; // ~63
-
-export const STREAM_DEBOUNCE_MS = 100;
-
 export const SHELL_COMMAND_NAME = 'Shell Command';
 
 export const SHELL_NAME = 'Shell';
@@ -24,6 +14,8 @@ export const SHELL_NAME = 'Shell';
 // usage.
 export const MAX_GEMINI_MESSAGE_LINES = 65536;
 
+export const SHELL_FOCUS_HINT_DELAY_MS = 5000;
+
 // Tool status symbols used in ToolMessage component
 export const TOOL_STATUS = {
   SUCCESS: '✓',
@@ -33,3 +25,36 @@ export const TOOL_STATUS = {
   CANCELED: '-',
   ERROR: 'x',
 } as const;
+
+// Maximum number of MCP resources to display per server before truncating
+export const MAX_MCP_RESOURCES_TO_SHOW = 10;
+
+export const WARNING_PROMPT_DURATION_MS = 3000;
+export const QUEUE_ERROR_DISPLAY_DURATION_MS = 3000;
+export const SHELL_ACTION_REQUIRED_TITLE_DELAY_MS = 30000;
+export const SHELL_SILENT_WORKING_TITLE_DELAY_MS = 120000;
+export const EXPAND_HINT_DURATION_MS = 5000;
+
+export const DEFAULT_BACKGROUND_OPACITY = 0.16;
+export const DEFAULT_INPUT_BACKGROUND_OPACITY = 0.24;
+export const DEFAULT_SELECTION_OPACITY = 0.2;
+export const DEFAULT_BORDER_OPACITY = 0.4;
+
+export const KEYBOARD_SHORTCUTS_URL =
+  'https://geminicli.com/docs/cli/keyboard-shortcuts/';
+export const LRU_BUFFER_PERF_CACHE_LIMIT = 20000;
+
+// Max lines to show for active shell output when not focused
+export const ACTIVE_SHELL_MAX_LINES = 15;
+
+// Max lines to preserve in history for completed shell commands
+export const COMPLETED_SHELL_MAX_LINES = 15;
+
+// Max lines to show for subagent results before collapsing
+export const SUBAGENT_MAX_LINES = 15;
+
+/** Minimum terminal width required to show the full context used label */
+export const MIN_TERMINAL_WIDTH_FOR_FULL_LABEL = 100;
+
+/** Default context usage fraction at which to trigger compression */
+export const DEFAULT_COMPRESSION_THRESHOLD = 0.5;

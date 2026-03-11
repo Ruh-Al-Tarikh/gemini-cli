@@ -5,7 +5,7 @@
  */
 
 import type React from 'react';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Box, Text } from 'ink';
 import { theme } from '../semantic-colors.js';
 import { RadioButtonSelect } from '../components/shared/RadioButtonSelect.js';
@@ -17,13 +17,12 @@ import { SettingScope } from '../../config/settings.js';
 import {
   AuthType,
   clearCachedCredentialFile,
-  debugLogger,
   type Config,
 } from '@google/gemini-cli-core';
 import { useKeypress } from '../hooks/useKeypress.js';
 import { AuthState } from '../types.js';
-import { runExitCleanup } from '../../utils/cleanup.js';
 import { validateAuthMethodWithSettings } from './useAuth.js';
+import { relaunchApp } from '../../utils/processUtils.js';
 
 interface AuthDialogProps {
   config: Config;
@@ -31,6 +30,7 @@ interface AuthDialogProps {
   setAuthState: (state: AuthState) => void;
   authError: string | null;
   onAuthError: (error: string | null) => void;
+  setAuthContext: (context: { requiresRestart?: boolean }) => void;
 }
 
 export function AuthDialog({
@@ -39,10 +39,12 @@ export function AuthDialog({
   setAuthState,
   authError,
   onAuthError,
+  setAuthContext,
 }: AuthDialogProps): React.JSX.Element {
+  const [exiting, setExiting] = useState(false);
   let items = [
     {
-      label: 'Login with Google',
+      label: 'Sign in with Google',
       value: AuthType.LOGIN_WITH_GOOGLE,
       key: AuthType.LOGIN_WITH_GOOGLE,
     },
@@ -75,9 +77,9 @@ export function AuthDialog({
     },
   ];
 
-  if (settings.merged.security?.auth?.enforcedType) {
+  if (settings.merged.security.auth.enforcedType) {
     items = items.filter(
-      (item) => item.value === settings.merged.security?.auth?.enforcedType,
+      (item) => item.value === settings.merged.security.auth.enforcedType,
     );
   }
 
@@ -85,13 +87,15 @@ export function AuthDialog({
   const defaultAuthTypeEnv = process.env['GEMINI_DEFAULT_AUTH_TYPE'];
   if (
     defaultAuthTypeEnv &&
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     Object.values(AuthType).includes(defaultAuthTypeEnv as AuthType)
   ) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     defaultAuthType = defaultAuthTypeEnv as AuthType;
   }
 
   let initialAuthIndex = items.findIndex((item) => {
-    if (settings.merged.security?.auth?.selectedType) {
+    if (settings.merged.security.auth.selectedType) {
       return item.value === settings.merged.security.auth.selectedType;
     }
 
@@ -105,13 +109,21 @@ export function AuthDialog({
 
     return item.value === AuthType.LOGIN_WITH_GOOGLE;
   });
-  if (settings.merged.security?.auth?.enforcedType) {
+  if (settings.merged.security.auth.enforcedType) {
     initialAuthIndex = 0;
   }
 
   const onSelect = useCallback(
     async (authType: AuthType | undefined, scope: LoadableSettingScope) => {
+      if (exiting) {
+        return;
+      }
       if (authType) {
+        if (authType === AuthType.LOGIN_WITH_GOOGLE) {
+          setAuthContext({ requiresRestart: true });
+        } else {
+          setAuthContext({});
+        }
         await clearCachedCredentialFile();
 
         settings.setValue(scope, 'security.auth.selectedType', authType);
@@ -119,24 +131,24 @@ export function AuthDialog({
           authType === AuthType.LOGIN_WITH_GOOGLE &&
           config.isBrowserLaunchSuppressed()
         ) {
-          runExitCleanup();
-          debugLogger.log(
-            `
-----------------------------------------------------------------
-Logging in with Google... Please restart Gemini CLI to continue.
-----------------------------------------------------------------
-            `,
-          );
-          process.exit(0);
+          setExiting(true);
+          setTimeout(relaunchApp, 100);
+          return;
         }
-      }
-      if (authType === AuthType.USE_GEMINI) {
-        setAuthState(AuthState.AwaitingApiKeyInput);
-        return;
+
+        if (authType === AuthType.USE_GEMINI) {
+          if (process.env['GEMINI_API_KEY'] !== undefined) {
+            setAuthState(AuthState.Unauthenticated);
+            return;
+          } else {
+            setAuthState(AuthState.AwaitingApiKeyInput);
+            return;
+          }
+        }
       }
       setAuthState(AuthState.Unauthenticated);
     },
-    [settings, config, setAuthState],
+    [settings, config, setAuthState, exiting, setAuthContext],
   );
 
   const handleAuthSelect = (authMethod: AuthType) => {
@@ -144,6 +156,7 @@ Logging in with Google... Please restart Gemini CLI to continue.
     if (error) {
       onAuthError(error);
     } else {
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
       onSelect(authMethod, SettingScope.User);
     }
   };
@@ -154,25 +167,45 @@ Logging in with Google... Please restart Gemini CLI to continue.
         // Prevent exit if there is an error message.
         // This means they user is not authenticated yet.
         if (authError) {
-          return;
+          return true;
         }
-        if (settings.merged.security?.auth?.selectedType === undefined) {
+        if (settings.merged.security.auth.selectedType === undefined) {
           // Prevent exiting if no auth method is set
           onAuthError(
             'You must select an auth method to proceed. Press Ctrl+C twice to exit.',
           );
-          return;
+          return true;
         }
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         onSelect(undefined, SettingScope.User);
+        return true;
       }
+      return false;
     },
     { isActive: true },
   );
 
+  if (exiting) {
+    return (
+      <Box
+        borderStyle="round"
+        borderColor={theme.ui.focus}
+        flexDirection="row"
+        padding={1}
+        width="100%"
+        alignItems="flex-start"
+      >
+        <Text color={theme.text.primary}>
+          Logging in with Google... Restarting Gemini CLI to continue.
+        </Text>
+      </Box>
+    );
+  }
+
   return (
     <Box
       borderStyle="round"
-      borderColor={theme.border.focused}
+      borderColor={theme.ui.focus}
       flexDirection="row"
       padding={1}
       width="100%"
@@ -213,9 +246,7 @@ Logging in with Google... Please restart Gemini CLI to continue.
         </Box>
         <Box marginTop={1}>
           <Text color={theme.text.link}>
-            {
-              'https://github.com/google-gemini/gemini-cli/blob/main/docs/tos-privacy.md'
-            }
+            {'https://geminicli.com/docs/resources/tos-privacy/'}
           </Text>
         </Box>
       </Box>
