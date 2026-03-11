@@ -75,6 +75,21 @@ export abstract class ExtensionLoader {
       await this.config.getMcpClientManager()!.startExtension(extension);
       await this.maybeRefreshGeminiTools(extension);
 
+      // Register policy rules and checkers
+      if (extension.rules || extension.checkers) {
+        const policyEngine = this.config.getPolicyEngine();
+        if (extension.rules) {
+          for (const rule of extension.rules) {
+            policyEngine.addRule(rule);
+          }
+        }
+        if (extension.checkers) {
+          for (const checker of extension.checkers) {
+            policyEngine.addChecker(checker);
+          }
+        }
+      }
+
       // Note: Context files are loaded only once all extensions are done
       // loading/unloading to reduce churn, see the `maybeRefreshMemories` call
       // below.
@@ -111,6 +126,9 @@ export abstract class ExtensionLoader {
       // reload memory, this is somewhat expensive and also busts the context
       // cache, we want to only do it once.
       await refreshServerHierarchicalMemory(this.config);
+      await this.config.getHookSystem()?.initialize();
+      await this.config.getAgentRegistry().reload();
+      await this.config.reloadSkills();
     }
   }
 
@@ -134,13 +152,12 @@ export abstract class ExtensionLoader {
    * then calls `startExtension` to include all extension features into the
    * program.
    */
-  protected maybeStartExtension(
+  protected async maybeStartExtension(
     extension: GeminiCLIExtension,
-  ): Promise<void> | undefined {
+  ): Promise<void> {
     if (this.config && this.config.getEnableExtensionReloading()) {
-      return this.startExtension(extension);
+      await this.startExtension(extension);
     }
-    return;
   }
 
   /**
@@ -165,6 +182,27 @@ export abstract class ExtensionLoader {
     try {
       await this.config.getMcpClientManager()!.stopExtension(extension);
       await this.maybeRefreshGeminiTools(extension);
+
+      // Unregister policy rules and checkers
+      if (extension.rules || extension.checkers) {
+        const policyEngine = this.config.getPolicyEngine();
+        const sources = new Set<string>();
+        if (extension.rules) {
+          for (const rule of extension.rules) {
+            if (rule.source) sources.add(rule.source);
+          }
+        }
+        if (extension.checkers) {
+          for (const checker of extension.checkers) {
+            if (checker.source) sources.add(checker.source);
+          }
+        }
+
+        for (const source of sources) {
+          policyEngine.removeRulesBySource(source);
+          policyEngine.removeCheckersBySource(source);
+        }
+      }
 
       // Note: Context files are loaded only once all extensions are done
       // loading/unloading to reduce churn, see the `maybeRefreshMemories` call
@@ -192,13 +230,12 @@ export abstract class ExtensionLoader {
    * then this also performs all necessary steps to remove all extension
    * features from the rest of the system.
    */
-  protected maybeStopExtension(
+  protected async maybeStopExtension(
     extension: GeminiCLIExtension,
-  ): Promise<void> | undefined {
+  ): Promise<void> {
     if (this.config && this.config.getEnableExtensionReloading()) {
-      return this.stopExtension(extension);
+      await this.stopExtension(extension);
     }
-    return;
   }
 
   async restartExtension(extension: GeminiCLIExtension): Promise<void> {

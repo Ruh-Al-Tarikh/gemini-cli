@@ -11,9 +11,12 @@ import {
   type ToolResult,
 } from '../tools/tools.js';
 import type { Config } from '../config/config.js';
+import { type AgentLoopContext } from '../config/agent-loop-context.js';
 import type { AgentDefinition, AgentInputs } from './types.js';
-import { convertInputConfigToJsonSchema } from './schema-utils.js';
-import { SubagentInvocation } from './invocation.js';
+import { LocalSubagentInvocation } from './local-invocation.js';
+import { RemoteAgentInvocation } from './remote-invocation.js';
+import { BrowserAgentInvocation } from './browser/browserAgentInvocation.js';
+import { BROWSER_AGENT_NAME } from './browser/browserAgentDefinition.js';
 import type { MessageBus } from '../confirmation-bus/message-bus.js';
 
 /**
@@ -31,29 +34,28 @@ export class SubagentToolWrapper extends BaseDeclarativeTool<
    * parameters based on the subagent's input configuration.
    *
    * @param definition The `AgentDefinition` of the subagent to wrap.
-   * @param config The runtime configuration, passed down to the subagent.
+   * @param context The execution context.
    * @param messageBus Optional message bus for policy enforcement.
    */
   constructor(
     private readonly definition: AgentDefinition,
-    private readonly config: Config,
-    messageBus?: MessageBus,
+    private readonly context: AgentLoopContext,
+    messageBus: MessageBus,
   ) {
-    // Dynamically generate the JSON schema required for the tool definition.
-    const parameterSchema = convertInputConfigToJsonSchema(
-      definition.inputConfig,
-    );
-
     super(
       definition.name,
       definition.displayName ?? definition.name,
       definition.description,
-      Kind.Think,
-      parameterSchema,
+      Kind.Agent,
+      definition.inputConfig.inputSchema,
+      messageBus,
       /* isOutputMarkdown */ true,
       /* canUpdateOutput */ true,
-      messageBus,
     );
+  }
+
+  private get config(): Config {
+    return this.context.config;
   }
 
   /**
@@ -67,12 +69,41 @@ export class SubagentToolWrapper extends BaseDeclarativeTool<
    */
   protected createInvocation(
     params: AgentInputs,
+    messageBus: MessageBus,
+    _toolName?: string,
+    _toolDisplayName?: string,
   ): ToolInvocation<AgentInputs, ToolResult> {
-    return new SubagentInvocation(
+    const definition = this.definition;
+    const effectiveMessageBus = messageBus;
+
+    if (definition.kind === 'remote') {
+      return new RemoteAgentInvocation(
+        definition,
+        params,
+        effectiveMessageBus,
+        _toolName,
+        _toolDisplayName,
+      );
+    }
+
+    // Special handling for browser agent - needs async MCP setup
+    if (definition.name === BROWSER_AGENT_NAME) {
+      return new BrowserAgentInvocation(
+        this.config,
+        params,
+        effectiveMessageBus,
+        _toolName,
+        _toolDisplayName,
+      );
+    }
+
+    return new LocalSubagentInvocation(
+      definition,
+      this.context,
       params,
-      this.definition,
-      this.config,
-      this.messageBus,
+      effectiveMessageBus,
+      _toolName,
+      _toolDisplayName,
     );
   }
 }

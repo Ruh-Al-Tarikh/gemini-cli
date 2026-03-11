@@ -11,6 +11,7 @@ import { debugLogger } from '@google/gemini-cli-core';
 import { ExtensionManager } from '../../config/extension-manager.js';
 import { requestConsentNonInteractive } from '../../config/extensions/consent.js';
 import { promptForSetting } from '../../config/extensions/extensionSettings.js';
+import { exitCli } from '../utils.js';
 
 interface DisableArgs {
   name: string;
@@ -64,7 +65,7 @@ export const disableCommand: CommandModule = {
           argv.scope &&
           !Object.values(SettingScope)
             .map((s) => s.toLowerCase())
-            .includes((argv.scope as string).toLowerCase())
+            .includes(argv.scope.toLowerCase())
         ) {
           throw new Error(
             `Invalid scope: ${argv.scope}. Please use one of ${Object.values(
@@ -78,8 +79,11 @@ export const disableCommand: CommandModule = {
       }),
   handler: async (argv) => {
     await handleDisable({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       name: argv['name'] as string,
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
       scope: argv['scope'] as string,
     });
+    await exitCli();
   },
 };

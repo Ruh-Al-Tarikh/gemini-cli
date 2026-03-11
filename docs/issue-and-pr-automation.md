@@ -1,4 +1,4 @@
-# Automation and Triage Processes
+# Automation and triage processes
 
 This document provides a detailed overview of the automated processes we use to
 manage and triage issues and pull requests. Our goal is to provide prompt
@@ -6,7 +6,7 @@ feedback and ensure that contributions are reviewed and integrated efficiently.
 Understanding this automation will help you as a contributor know what to expect
 and how to best interact with our repository bots.
 
-## Guiding Principle: Issues and Pull Requests
+## Guiding principle: Issues and pull requests
 
 First and foremost, almost every Pull Request (PR) should be linked to a
 corresponding Issue. The issue describes the "what" and the "why" (the bug or
@@ -14,14 +14,17 @@ feature), while the PR is the "how" (the implementation). This separation helps
 us track work, prioritize features, and maintain clear historical context. Our
 automation is built around this principle.
 
+> **Note:** Issues tagged as "🔒Maintainers only" are reserved for project
+> maintainers. We will not accept pull requests related to these issues.
+
 ---
 
-## Detailed Automation Workflows
+## Detailed automation workflows
 
 Here is a breakdown of the specific automation workflows that run in our
 repository.
 
-### 1. When you open an Issue: `Automated Issue Triage`
+### 1. When you open an issue: `Automated Issue Triage`
 
 This is the first bot you will interact with when you create an issue. Its job
 is to perform an initial analysis and apply the correct labels.
@@ -48,7 +51,7 @@ is to perform an initial analysis and apply the correct labels.
   - If the `status/need-information` label is added, please provide the
     requested details in a comment.
 
-### 2. When you open a Pull Request: `Continuous Integration (CI)`
+### 2. When you open a pull request: `Continuous Integration (CI)`
 
 This workflow ensures that all changes meet our quality standards before they
 can be merged.
@@ -70,7 +73,7 @@ can be merged.
   - If a check fails (a red "X" ❌), click the "Details" link next to the failed
     check to view the logs, identify the problem, and push a fix.
 
-### 3. Ongoing Triage for Pull Requests: `PR Auditing and Label Sync`
+### 3. Ongoing triage for pull requests: `PR Auditing and Label Sync`
 
 This workflow runs periodically to ensure all open PRs are correctly linked to
 issues and have consistent labels.
@@ -93,7 +96,7 @@ issues and have consistent labels.
   - This will ensure your PR is correctly categorized and moves through the
     review process smoothly.
 
-### 4. Ongoing Triage for Issues: `Scheduled Issue Triage`
+### 4. Ongoing triage for issues: `Scheduled Issue Triage`
 
 This is a fallback workflow to ensure that no issue gets missed by the triage
 process.
@@ -110,7 +113,45 @@ process.
     ensure every issue is eventually categorized, even if the initial triage
     fails.
 
-### 5. Release Automation
+### 5. Automatic unassignment of inactive contributors: `Unassign Inactive Issue Assignees`
+
+To keep the list of open `help wanted` issues accessible to all contributors,
+this workflow automatically removes **external contributors** who have not
+opened a linked pull request within **7 days** of being assigned. Maintainers,
+org members, and repo collaborators with write access or above are always exempt
+and will never be auto-unassigned.
+
+- **Workflow File**: `.github/workflows/unassign-inactive-assignees.yml`
+- **When it runs**: Every day at 09:00 UTC, and can be triggered manually with
+  an optional `dry_run` mode.
+- **What it does**:
+  1. Finds every open issue labeled `help wanted` that has at least one
+     assignee.
+  2. Identifies privileged users (team members, repo collaborators with write+
+     access, maintainers) and skips them entirely.
+  3. For each remaining (external) assignee it reads the issue's timeline to
+     determine:
+     - The exact date they were assigned (using `assigned` timeline events).
+     - Whether they have opened a PR that is already linked/cross-referenced to
+       the issue.
+  4. Each cross-referenced PR is fetched to verify it is **ready for review**:
+     open and non-draft, or already merged. Draft PRs do not count.
+  5. If an assignee has been assigned for **more than 7 days** and no qualifying
+     PR is found, they are automatically unassigned and a comment is posted
+     explaining the reason and how to re-claim the issue.
+  6. Assignees who have a non-draft, open or merged PR linked to the issue are
+     **never** unassigned by this workflow.
+- **What you should do**:
+  - **Open a real PR, not a draft**: Within 7 days of being assigned, open a PR
+    that is ready for review and include `Fixes #<issue-number>` in the
+    description. Draft PRs do not satisfy the requirement and will not prevent
+    auto-unassignment.
+  - **Re-assign if unassigned by mistake**: Comment `/assign` on the issue to
+    assign yourself again.
+  - **Unassign yourself** if you can no longer work on the issue by commenting
+    `/unassign`, so other contributors can pick it up right away.
+
+### 6. Release automation
 
 This workflow handles the process of packaging and publishing new versions of
 the Gemini CLI.
