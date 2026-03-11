@@ -4,7 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useMemo, useEffect, useState } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useEffect,
+  useState,
+  createElement,
+} from 'react';
 import { type PartListUnion } from '@google/genai';
 import process from 'node:process';
 import type { UseHistoryManagerReturn } from './useHistoryManager.js';
@@ -12,6 +18,8 @@ import type {
   Config,
   ExtensionsStartingEvent,
   ExtensionsStoppingEvent,
+  ToolCallConfirmationDetails,
+  AgentDefinition,
 } from '@google/gemini-cli-core';
 import {
   GitService,
@@ -22,6 +30,11 @@ import {
   ToolConfirmationOutcome,
   Storage,
   IdeClient,
+  coreEvents,
+  addMCPStatusChangeListener,
+  removeMCPStatusChangeListener,
+  MCPDiscoveryState,
+  CoreToolCallStatus,
 } from '@google/gemini-cli-core';
 import { useSessionStats } from '../contexts/SessionContext.js';
 import type {
@@ -30,6 +43,7 @@ import type {
   SlashCommandProcessorResult,
   HistoryItem,
   ConfirmationRequest,
+  IndividualToolCallDisplay,
 } from '../types.js';
 import { MessageType } from '../types.js';
 import type { LoadedSettings } from '../../config/settings.js';
@@ -38,13 +52,17 @@ import { CommandService } from '../../services/CommandService.js';
 import { BuiltinCommandLoader } from '../../services/BuiltinCommandLoader.js';
 import { FileCommandLoader } from '../../services/FileCommandLoader.js';
 import { McpPromptLoader } from '../../services/McpPromptLoader.js';
+import { SkillCommandLoader } from '../../services/SkillCommandLoader.js';
 import { parseSlashCommand } from '../../utils/commands.js';
 import {
   type ExtensionUpdateAction,
   type ExtensionUpdateStatus,
 } from '../state/extensions.js';
-import { appEvents } from '../../utils/events.js';
-import { useAlternateBuffer } from './useAlternateBuffer.js';
+import {
+  LogoutConfirmationDialog,
+  LogoutChoice,
+} from '../components/LogoutConfirmationDialog.js';
+import { runExitCleanup } from '../../utils/cleanup.js';
 
 interface SlashCommandProcessorActions {
   openAuthDialog: () => void;
@@ -52,7 +70,13 @@ interface SlashCommandProcessorActions {
   openEditorDialog: () => void;
   openPrivacyNotice: () => void;
   openSettingsDialog: () => void;
+  openSessionBrowser: () => void;
   openModelDialog: () => void;
+  openAgentConfigDialog: (
+    name: string,
+    displayName: string,
+    definition: AgentDefinition,
+  ) => void;
   openPermissionsDialog: (props?: { targetDirectory?: string }) => void;
   quit: (messages: HistoryItem[]) => void;
   setDebugMessage: (message: string) => void;
@@ -60,6 +84,9 @@ interface SlashCommandProcessorActions {
   toggleDebugProfiler: () => void;
   dispatchExtensionStateUpdate: (action: ExtensionUpdateAction) => void;
   addConfirmUpdateExtensionRequest: (request: ConfirmationRequest) => void;
+  toggleBackgroundShell: () => void;
+  toggleShortcutsHelp: () => void;
+  setText: (text: string) => void;
 }
 
 /**
@@ -77,26 +104,18 @@ export const useSlashCommandProcessor = (
   actions: SlashCommandProcessorActions,
   extensionsUpdateState: Map<string, ExtensionUpdateStatus>,
   isConfigInitialized: boolean,
+  setBannerVisible: (visible: boolean) => void,
   setCustomDialog: (dialog: React.ReactNode | null) => void,
 ) => {
   const session = useSessionStats();
   const [commands, setCommands] = useState<readonly SlashCommand[] | undefined>(
     undefined,
   );
-  const alternateBuffer = useAlternateBuffer();
   const [reloadTrigger, setReloadTrigger] = useState(0);
 
   const reloadCommands = useCallback(() => {
     setReloadTrigger((v) => v + 1);
   }, []);
-  const [shellConfirmationRequest, setShellConfirmationRequest] =
-    useState<null | {
-      commands: string[];
-      onConfirm: (
-        outcome: ToolConfirmationOutcome,
-        approvedCommands?: string[],
-      ) => void;
-    }>(null);
   const [confirmationRequest, setConfirmationRequest] = useState<null | {
     prompt: React.ReactNode;
     onConfirm: (confirmed: boolean) => void;
@@ -199,12 +218,16 @@ export const useSlashCommandProcessor = (
         addItem,
         clear: () => {
           clearItems();
-          if (!alternateBuffer) {
-            console.clear();
-          }
           refreshStatic();
+          setBannerVisible(false);
         },
-        loadHistory,
+        loadHistory: (history, postLoadInput) => {
+          loadHistory(history);
+          refreshStatic();
+          if (postLoadInput !== undefined) {
+            actions.setText(postLoadInput);
+          }
+        },
         setDebugMessage: actions.setDebugMessage,
         pendingItem,
         setPendingItem,
@@ -212,11 +235,15 @@ export const useSlashCommandProcessor = (
         toggleDebugProfiler: actions.toggleDebugProfiler,
         toggleVimEnabled,
         reloadCommands,
+        openAgentConfigDialog: actions.openAgentConfigDialog,
         extensionsUpdateState,
         dispatchExtensionStateUpdate: actions.dispatchExtensionStateUpdate,
         addConfirmUpdateExtensionRequest:
           actions.addConfirmUpdateExtensionRequest,
+        setConfirmationRequest,
         removeComponent: () => setCustomDialog(null),
+        toggleBackgroundShell: actions.toggleBackgroundShell,
+        toggleShortcutsHelp: actions.toggleShortcutsHelp,
       },
       session: {
         stats: session.stats,
@@ -224,7 +251,6 @@ export const useSlashCommandProcessor = (
       },
     }),
     [
-      alternateBuffer,
       config,
       settings,
       gitService,
@@ -237,10 +263,12 @@ export const useSlashCommandProcessor = (
       actions,
       pendingItem,
       setPendingItem,
+      setConfirmationRequest,
       toggleVimEnabled,
       sessionShellAllowlist,
       reloadCommands,
       extensionsUpdateState,
+      setBannerVisible,
       setCustomDialog,
     ],
   );
@@ -254,10 +282,15 @@ export const useSlashCommandProcessor = (
       reloadCommands();
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     (async () => {
       const ideClient = await IdeClient.getInstance();
       ideClient.addStatusChangeListener(listener);
     })();
+
+    // Listen for MCP server status changes (e.g. connection, discovery completion)
+    // to reload slash commands (since they may include MCP prompts).
+    addMCPStatusChangeListener(listener);
 
     // TODO: Ideally this would happen more directly inside the ExtensionLoader,
     // but the CommandService today is not conducive to that since it isn't a
@@ -270,31 +303,40 @@ export const useSlashCommandProcessor = (
       // starting/stopping
       reloadCommands();
     };
-    appEvents.on('extensionsStarting', extensionEventListener);
-    appEvents.on('extensionsStopping', extensionEventListener);
+    coreEvents.on('extensionsStarting', extensionEventListener);
+    coreEvents.on('extensionsStopping', extensionEventListener);
 
     return () => {
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
       (async () => {
         const ideClient = await IdeClient.getInstance();
         ideClient.removeStatusChangeListener(listener);
       })();
-      appEvents.off('extensionsStarting', extensionEventListener);
-      appEvents.off('extensionsStopping', extensionEventListener);
+      removeMCPStatusChangeListener(listener);
+      coreEvents.off('extensionsStarting', extensionEventListener);
+      coreEvents.off('extensionsStopping', extensionEventListener);
     };
   }, [config, reloadCommands]);
 
   useEffect(() => {
     const controller = new AbortController();
 
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     (async () => {
       const commandService = await CommandService.create(
         [
+          new SkillCommandLoader(config),
           new McpPromptLoader(config),
           new BuiltinCommandLoader(config),
           new FileCommandLoader(config),
         ],
         controller.signal,
       );
+
+      if (controller.signal.aborted) {
+        return;
+      }
+
       setCommands(commandService.getCommands());
     })();
 
@@ -308,6 +350,7 @@ export const useSlashCommandProcessor = (
       rawQuery: PartListUnion,
       oneTimeShellAllowlist?: Set<string>,
       overwriteConfirmed?: boolean,
+      addToHistory: boolean = true,
     ): Promise<SlashCommandProcessorResult | false> => {
       if (!commands) {
         return false;
@@ -321,17 +364,47 @@ export const useSlashCommandProcessor = (
         return false;
       }
 
-      setIsProcessing(true);
-
-      const userMessageTimestamp = Date.now();
-      addItem({ type: MessageType.USER, text: trimmed }, userMessageTimestamp);
-
-      let hasError = false;
       const {
         commandToExecute,
         args,
         canonicalPath: resolvedCommandPath,
       } = parseSlashCommand(trimmed, commands);
+
+      // If the input doesn't match any known command, check if MCP servers
+      // are still loading (the command might come from an MCP server).
+      // Otherwise, treat it as regular text input (e.g. file paths like
+      // /home/user/file.txt) and let it be sent to the model.
+      if (!commandToExecute) {
+        const isMcpLoading =
+          config?.getMcpClientManager()?.getDiscoveryState() ===
+          MCPDiscoveryState.IN_PROGRESS;
+        if (isMcpLoading) {
+          setIsProcessing(true);
+          if (addToHistory) {
+            addItem({ type: MessageType.USER, text: trimmed }, Date.now());
+          }
+          addMessage({
+            type: MessageType.ERROR,
+            content: `Unknown command: ${trimmed}. Command might have been from an MCP server but MCP servers are not done loading.`,
+            timestamp: new Date(),
+          });
+          setIsProcessing(false);
+          return { type: 'handled' };
+        }
+        return false;
+      }
+
+      setIsProcessing(true);
+
+      if (addToHistory) {
+        const userMessageTimestamp = Date.now();
+        addItem(
+          { type: MessageType.USER, text: trimmed },
+          userMessageTimestamp,
+        );
+      }
+
+      let hasError = false;
 
       const subcommand =
         resolvedCommandPath.length > 1
@@ -374,6 +447,7 @@ export const useSlashCommandProcessor = (
                     type: 'schedule_tool',
                     toolName: result.toolName,
                     toolArgs: result.toolArgs,
+                    postSubmitPrompt: result.postSubmitPrompt,
                   };
                 case 'message':
                   addItem(
@@ -385,6 +459,22 @@ export const useSlashCommandProcessor = (
                       text: result.content,
                     },
                     Date.now(),
+                  );
+                  return { type: 'handled' };
+                case 'logout':
+                  // Show logout confirmation dialog with Login/Exit options
+                  setCustomDialog(
+                    createElement(LogoutConfirmationDialog, {
+                      onSelect: async (choice: LogoutChoice) => {
+                        setCustomDialog(null);
+                        if (choice === LogoutChoice.LOGIN) {
+                          actions.openAuthDialog();
+                        } else {
+                          await runExitCleanup();
+                          process.exit(0);
+                        }
+                      },
+                    }),
                   );
                   return { type: 'handled' };
                 case 'dialog':
@@ -401,14 +491,42 @@ export const useSlashCommandProcessor = (
                     case 'privacy':
                       actions.openPrivacyNotice();
                       return { type: 'handled' };
+                    case 'sessionBrowser':
+                      actions.openSessionBrowser();
+                      return { type: 'handled' };
                     case 'settings':
                       actions.openSettingsDialog();
                       return { type: 'handled' };
                     case 'model':
                       actions.openModelDialog();
                       return { type: 'handled' };
+                    case 'agentConfig': {
+                      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                      const props = result.props as Record<string, unknown>;
+                      if (
+                        !props ||
+                        // eslint-disable-next-line no-restricted-syntax
+                        typeof props['name'] !== 'string' ||
+                        // eslint-disable-next-line no-restricted-syntax
+                        typeof props['displayName'] !== 'string' ||
+                        !props['definition']
+                      ) {
+                        throw new Error(
+                          'Received invalid properties for agentConfig dialog action.',
+                        );
+                      }
+
+                      actions.openAgentConfigDialog(
+                        props['name'],
+                        props['displayName'],
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+                        props['definition'] as AgentDefinition,
+                      );
+                      return { type: 'handled' };
+                    }
                     case 'permissions':
                       actions.openPermissionsDialog(
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
                         result.props as { targetDirectory?: string },
                       );
                       return { type: 'handled' };
@@ -439,30 +557,60 @@ export const useSlashCommandProcessor = (
                     content: result.content,
                   };
                 case 'confirm_shell_commands': {
+                  const callId = `expansion-${Date.now()}`;
                   const { outcome, approvedCommands } = await new Promise<{
                     outcome: ToolConfirmationOutcome;
                     approvedCommands?: string[];
                   }>((resolve) => {
-                    setShellConfirmationRequest({
+                    const confirmationDetails: ToolCallConfirmationDetails = {
+                      type: 'exec',
+                      title: `Confirm Shell Expansion`,
+                      command: result.commandsToConfirm[0] || '',
+                      rootCommand: result.commandsToConfirm[0] || '',
+                      rootCommands: result.commandsToConfirm,
                       commands: result.commandsToConfirm,
-                      onConfirm: (
-                        resolvedOutcome,
-                        resolvedApprovedCommands,
-                      ) => {
-                        setShellConfirmationRequest(null); // Close the dialog
+                      onConfirm: async (resolvedOutcome) => {
+                        // Close the pending tool display by resolving
                         resolve({
                           outcome: resolvedOutcome,
-                          approvedCommands: resolvedApprovedCommands,
+                          approvedCommands:
+                            resolvedOutcome === ToolConfirmationOutcome.Cancel
+                              ? []
+                              : result.commandsToConfirm,
                         });
                       },
+                    };
+
+                    const toolDisplay: IndividualToolCallDisplay = {
+                      callId,
+                      name: 'Expansion',
+                      description: 'Command expansion needs shell access',
+                      status: CoreToolCallStatus.AwaitingApproval,
+                      isClientInitiated: true,
+                      resultDisplay: undefined,
+                      confirmationDetails,
+                    };
+
+                    setPendingItem({
+                      type: 'tool_group',
+                      tools: [toolDisplay],
                     });
                   });
+
+                  setPendingItem(null);
 
                   if (
                     outcome === ToolConfirmationOutcome.Cancel ||
                     !approvedCommands ||
                     approvedCommands.length === 0
                   ) {
+                    addItem(
+                      {
+                        type: MessageType.INFO,
+                        text: 'Slash command shell execution declined.',
+                      },
+                      Date.now(),
+                    );
                     return { type: 'handled' };
                   }
 
@@ -476,6 +624,8 @@ export const useSlashCommandProcessor = (
                     result.originalInvocation.raw,
                     // Pass the approved commands as a one-time grant for this execution.
                     new Set(approvedCommands),
+                    undefined,
+                    false, // Do not add to history again
                   );
                 }
                 case 'confirm_action': {
@@ -535,12 +685,6 @@ export const useSlashCommandProcessor = (
           }
         }
 
-        addMessage({
-          type: MessageType.ERROR,
-          content: `Unknown command: ${trimmed}`,
-          timestamp: new Date(),
-        });
-
         return { type: 'handled' };
       } catch (e: unknown) {
         hasError = true;
@@ -581,7 +725,6 @@ export const useSlashCommandProcessor = (
       commands,
       commandContext,
       addMessage,
-      setShellConfirmationRequest,
       setSessionShellAllowlist,
       setIsProcessing,
       setConfirmationRequest,
@@ -594,7 +737,6 @@ export const useSlashCommandProcessor = (
     slashCommands: commands,
     pendingHistoryItems,
     commandContext,
-    shellConfirmationRequest,
     confirmationRequest,
   };
 };

@@ -61,6 +61,7 @@ export const getLatestGitHubRelease = async (
 
     const endpoint = `https://api.github.com/repos/google-github-actions/run-gemini-cli/releases/latest`;
 
+    // eslint-disable-next-line no-restricted-syntax -- TODO: Migrate to safeFetch for SSRF protection
     const response = await fetch(endpoint, {
       method: 'GET',
       headers: {
@@ -78,10 +79,12 @@ export const getLatestGitHubRelease = async (
       );
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const releaseTag = (await response.json()).tag_name;
     if (!releaseTag) {
       throw new Error(`Response did not include tag_name field`);
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return releaseTag;
   } catch (_error) {
     debugLogger.debug(
@@ -104,17 +107,38 @@ export function getGitHubRepoInfo(): { owner: string; repo: string } {
     encoding: 'utf-8',
   }).trim();
 
-  // Matches either https://github.com/owner/repo.git or git@github.com:owner/repo.git
-  const match = remoteUrl.match(
-    /(?:https?:\/\/|git@)github\.com(?::|\/)([^/]+)\/([^/]+?)(?:\.git)?$/,
-  );
-
-  // If the regex fails match, throw an error.
-  if (!match || !match[1] || !match[2]) {
+  // Handle SCP-style SSH URLs (git@github.com:owner/repo.git)
+  let urlToParse = remoteUrl;
+  if (remoteUrl.startsWith('git@github.com:')) {
+    urlToParse = remoteUrl.replace('git@github.com:', '');
+  } else if (remoteUrl.startsWith('git@')) {
+    // SSH URL for a different provider (GitLab, Bitbucket, etc.)
     throw new Error(
       `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
     );
   }
 
-  return { owner: match[1], repo: match[2] };
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(urlToParse, 'https://github.com');
+  } catch {
+    throw new Error(
+      `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
+    );
+  }
+
+  if (parsedUrl.host !== 'github.com') {
+    throw new Error(
+      `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
+    );
+  }
+
+  const parts = parsedUrl.pathname.split('/').filter((part) => part !== '');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(
+      `Owner & repo could not be extracted from remote URL: ${remoteUrl}`,
+    );
+  }
+
+  return { owner: parts[0], repo: parts[1].replace(/\.git$/, '') };
 }

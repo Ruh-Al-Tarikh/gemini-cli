@@ -13,48 +13,43 @@ import {
   afterEach,
   type Mock,
 } from 'vitest';
-import { type CommandModule, type Argv } from 'yargs';
+import { coreEvents } from '@google/gemini-cli-core';
+import { type Argv } from 'yargs';
 import { handleLink, linkCommand } from './link.js';
 import { ExtensionManager } from '../../config/extension-manager.js';
 import { loadSettings, type LoadedSettings } from '../../config/settings.js';
 import { getErrorMessage } from '../../utils/errors.js';
 
-// Mock dependencies
+vi.mock('@google/gemini-cli-core', async (importOriginal) => {
+  const { mockCoreDebugLogger } = await import(
+    '../../test-utils/mockDebugLogger.js'
+  );
+  return mockCoreDebugLogger(
+    await importOriginal<typeof import('@google/gemini-cli-core')>(),
+    { stripAnsi: true },
+  );
+});
+
 vi.mock('../../config/extension-manager.js');
 vi.mock('../../config/settings.js');
 vi.mock('../../utils/errors.js');
-vi.mock('@google/gemini-cli-core', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('@google/gemini-cli-core')>();
-  return {
-    ...actual,
-    debugLogger: {
-      log: vi.fn(),
-      error: vi.fn(),
-    },
-  };
-});
 vi.mock('../../config/extensions/consent.js', () => ({
   requestConsentNonInteractive: vi.fn(),
 }));
 vi.mock('../../config/extensions/extensionSettings.js', () => ({
   promptForSetting: vi.fn(),
 }));
+vi.mock('../utils.js', () => ({
+  exitCli: vi.fn(),
+}));
 
 describe('extensions link command', () => {
   const mockLoadSettings = vi.mocked(loadSettings);
   const mockGetErrorMessage = vi.mocked(getErrorMessage);
   const mockExtensionManager = vi.mocked(ExtensionManager);
-  interface MockDebugLogger {
-    log: Mock;
-    error: Mock;
-  }
-  let mockDebugLogger: MockDebugLogger;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockDebugLogger = (await import('@google/gemini-cli-core'))
-      .debugLogger as unknown as MockDebugLogger;
     mockLoadSettings.mockReturnValue({
       merged: {},
     } as unknown as LoadedSettings);
@@ -87,7 +82,8 @@ describe('extensions link command', () => {
         source: '/local/path/to/extension',
         type: 'link',
       });
-      expect(mockDebugLogger.log).toHaveBeenCalledWith(
+      expect(coreEvents.emitConsoleLog).toHaveBeenCalledWith(
+        'log',
         'Extension "my-linked-extension" linked successfully and enabled.',
       );
       mockCwd.mockRestore();
@@ -107,14 +103,17 @@ describe('extensions link command', () => {
 
       await handleLink({ path: '/local/path/to/extension' });
 
-      expect(mockDebugLogger.error).toHaveBeenCalledWith('Link failed message');
+      expect(coreEvents.emitConsoleLog).toHaveBeenCalledWith(
+        'error',
+        'Link failed message',
+      );
       expect(mockProcessExit).toHaveBeenCalledWith(1);
       mockProcessExit.mockRestore();
     });
   });
 
   describe('linkCommand', () => {
-    const command = linkCommand as CommandModule;
+    const command = linkCommand;
 
     it('should have correct command and describe', () => {
       expect(command.command).toBe('link <path>');
@@ -126,6 +125,7 @@ describe('extensions link command', () => {
     describe('builder', () => {
       interface MockYargs {
         positional: Mock;
+        option: Mock;
         check: Mock;
       }
 
@@ -133,6 +133,7 @@ describe('extensions link command', () => {
       beforeEach(() => {
         yargsMock = {
           positional: vi.fn().mockReturnThis(),
+          option: vi.fn().mockReturnThis(),
           check: vi.fn().mockReturnThis(),
         };
       });
@@ -144,6 +145,12 @@ describe('extensions link command', () => {
         expect(yargsMock.positional).toHaveBeenCalledWith('path', {
           describe: 'The name of the extension to link.',
           type: 'string',
+        });
+        expect(yargsMock.option).toHaveBeenCalledWith('consent', {
+          describe:
+            'Acknowledge the security risks of installing an extension and skip the confirmation prompt.',
+          type: 'boolean',
+          default: false,
         });
         expect(yargsMock.check).toHaveBeenCalled();
       });
@@ -160,7 +167,9 @@ describe('extensions link command', () => {
         _: [],
         $0: '',
       };
-      await (command.handler as unknown as (args: TestArgv) => void)(argv);
+      await (command.handler as unknown as (args: TestArgv) => Promise<void>)(
+        argv,
+      );
 
       expect(
         mockExtensionManager.prototype.installOrUpdateExtension,

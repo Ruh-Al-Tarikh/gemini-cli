@@ -36,7 +36,7 @@ describe('generate-keybindings-doc', () => {
           },
           {
             description: 'Submit with Enter if no modifiers are held.',
-            bindings: [{ key: 'return', ctrl: false, shift: false }],
+            bindings: [{ key: 'enter', shift: false, ctrl: false }],
           },
         ],
       },
@@ -47,7 +47,7 @@ describe('generate-keybindings-doc', () => {
             description: 'Move up through results.',
             bindings: [
               { key: 'up', shift: false },
-              { key: 'p', ctrl: true, shift: false },
+              { key: 'p', shift: false, ctrl: true },
             ],
           },
         ],
@@ -57,12 +57,11 @@ describe('generate-keybindings-doc', () => {
     const markdown = renderDocumentation(sections);
     expect(markdown).toContain('#### Custom Controls');
     expect(markdown).toContain('Trigger custom action.');
-    expect(markdown).toContain('`Ctrl + X`');
+    expect(markdown).toContain('`Ctrl+X`');
     expect(markdown).toContain('Submit with Enter if no modifiers are held.');
-    expect(markdown).toContain('`Enter (no Ctrl, no Shift)`');
+    expect(markdown).toContain('`Enter`');
     expect(markdown).toContain('#### Navigation');
     expect(markdown).toContain('Move up through results.');
-    expect(markdown).toContain('`Up Arrow (no Shift)`');
-    expect(markdown).toContain('`Ctrl + P (no Shift)`');
+    expect(markdown).toContain('`Up`<br />`Ctrl+P`');
   });
 });

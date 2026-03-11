@@ -9,6 +9,7 @@ import { ClassifierStrategy } from './classifierStrategy.js';
 import type { RoutingContext } from '../routingStrategy.js';
 import type { Config } from '../../config/config.js';
 import type { BaseLlmClient } from '../../core/baseLlmClient.js';
+import type { LocalLiteRtLmClient } from '../../core/localLiteRtLmClient.js';
 import {
   isFunctionCall,
   isFunctionResponse,
@@ -16,19 +17,25 @@ import {
 import {
   DEFAULT_GEMINI_FLASH_MODEL,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_MODEL_AUTO,
+  PREVIEW_GEMINI_MODEL_AUTO,
+  PREVIEW_GEMINI_3_1_MODEL,
+  PREVIEW_GEMINI_3_1_CUSTOM_TOOLS_MODEL,
 } from '../../config/models.js';
 import { promptIdContext } from '../../utils/promptIdContext.js';
 import type { Content } from '@google/genai';
 import type { ResolvedModelConfig } from '../../services/modelConfigService.js';
+import { debugLogger } from '../../utils/debugLogger.js';
+import { AuthType } from '../../core/contentGenerator.js';
 
 vi.mock('../../core/baseLlmClient.js');
-vi.mock('../../utils/promptIdContext.js');
 
 describe('ClassifierStrategy', () => {
   let strategy: ClassifierStrategy;
   let mockContext: RoutingContext;
   let mockConfig: Config;
   let mockBaseLlmClient: BaseLlmClient;
+  let mockLocalLiteRtLmClient: LocalLiteRtLmClient;
   let mockResolvedConfig: ResolvedModelConfig;
 
   beforeEach(() => {
@@ -40,6 +47,7 @@ describe('ClassifierStrategy', () => {
       request: [{ text: 'simple task' }],
       signal: new AbortController().signal,
     };
+
     mockResolvedConfig = {
       model: 'classifier',
       generateContentConfig: {},
@@ -48,12 +56,58 @@ describe('ClassifierStrategy', () => {
       modelConfigService: {
         getResolvedConfig: vi.fn().mockReturnValue(mockResolvedConfig),
       },
+      getModel: vi.fn().mockReturnValue(DEFAULT_GEMINI_MODEL_AUTO),
+      getNumericalRoutingEnabled: vi.fn().mockResolvedValue(false),
+      getGemini31Launched: vi.fn().mockResolvedValue(false),
+      getUseCustomToolModel: vi.fn().mockImplementation(async () => {
+        const launched = await mockConfig.getGemini31Launched();
+        const authType = mockConfig.getContentGeneratorConfig().authType;
+        return launched && authType === AuthType.USE_GEMINI;
+      }),
+      getContentGeneratorConfig: vi.fn().mockReturnValue({
+        authType: AuthType.LOGIN_WITH_GOOGLE,
+      }),
     } as unknown as Config;
     mockBaseLlmClient = {
       generateJson: vi.fn(),
     } as unknown as BaseLlmClient;
+    mockLocalLiteRtLmClient = {} as LocalLiteRtLmClient;
 
-    vi.mocked(promptIdContext.getStore).mockReturnValue('test-prompt-id');
+    vi.spyOn(promptIdContext, 'getStore').mockReturnValue('test-prompt-id');
+  });
+
+  it('should return null if numerical routing is enabled and model is Gemini 3', async () => {
+    vi.mocked(mockConfig.getNumericalRoutingEnabled).mockResolvedValue(true);
+    vi.mocked(mockConfig.getModel).mockReturnValue(PREVIEW_GEMINI_MODEL_AUTO);
+
+    const decision = await strategy.route(
+      mockContext,
+      mockConfig,
+      mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
+    );
+
+    expect(decision).toBeNull();
+    expect(mockBaseLlmClient.generateJson).not.toHaveBeenCalled();
+  });
+
+  it('should NOT return null if numerical routing is enabled but model is NOT Gemini 3', async () => {
+    vi.mocked(mockConfig.getNumericalRoutingEnabled).mockResolvedValue(true);
+    vi.mocked(mockConfig.getModel).mockReturnValue(DEFAULT_GEMINI_MODEL_AUTO);
+    vi.mocked(mockBaseLlmClient.generateJson).mockResolvedValue({
+      reasoning: 'test',
+      model_choice: 'flash',
+    });
+
+    const decision = await strategy.route(
+      mockContext,
+      mockConfig,
+      mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
+    );
+
+    expect(decision).not.toBeNull();
+    expect(mockBaseLlmClient.generateJson).toHaveBeenCalled();
   });
 
   it('should call generateJson with the correct parameters', async () => {
@@ -65,7 +119,12 @@ describe('ClassifierStrategy', () => {
       mockApiResponse,
     );
 
-    await strategy.route(mockContext, mockConfig, mockBaseLlmClient);
+    await strategy.route(
+      mockContext,
+      mockConfig,
+      mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
+    );
 
     expect(mockBaseLlmClient.generateJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -88,6 +147,7 @@ describe('ClassifierStrategy', () => {
       mockContext,
       mockConfig,
       mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
     );
 
     expect(mockBaseLlmClient.generateJson).toHaveBeenCalledOnce();
@@ -115,6 +175,7 @@ describe('ClassifierStrategy', () => {
       mockContext,
       mockConfig,
       mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
     );
 
     expect(mockBaseLlmClient.generateJson).toHaveBeenCalledOnce();
@@ -130,7 +191,7 @@ describe('ClassifierStrategy', () => {
 
   it('should return null if the classifier API call fails', async () => {
     const consoleWarnSpy = vi
-      .spyOn(console, 'warn')
+      .spyOn(debugLogger, 'warn')
       .mockImplementation(() => {});
     const testError = new Error('API Failure');
     vi.mocked(mockBaseLlmClient.generateJson).mockRejectedValue(testError);
@@ -139,6 +200,7 @@ describe('ClassifierStrategy', () => {
       mockContext,
       mockConfig,
       mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
     );
 
     expect(decision).toBeNull();
@@ -148,7 +210,7 @@ describe('ClassifierStrategy', () => {
 
   it('should return null if the classifier returns a malformed JSON object', async () => {
     const consoleWarnSpy = vi
-      .spyOn(console, 'warn')
+      .spyOn(debugLogger, 'warn')
       .mockImplementation(() => {});
     const malformedApiResponse = {
       reasoning: 'This is a simple task.',
@@ -162,6 +224,7 @@ describe('ClassifierStrategy', () => {
       mockContext,
       mockConfig,
       mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
     );
 
     expect(decision).toBeNull();
@@ -189,7 +252,12 @@ describe('ClassifierStrategy', () => {
       mockApiResponse,
     );
 
-    await strategy.route(mockContext, mockConfig, mockBaseLlmClient);
+    await strategy.route(
+      mockContext,
+      mockConfig,
+      mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
+    );
 
     const generateJsonCall = vi.mocked(mockBaseLlmClient.generateJson).mock
       .calls[0][0];
@@ -225,7 +293,12 @@ describe('ClassifierStrategy', () => {
       mockApiResponse,
     );
 
-    await strategy.route(mockContext, mockConfig, mockBaseLlmClient);
+    await strategy.route(
+      mockContext,
+      mockConfig,
+      mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
+    );
 
     const generateJsonCall = vi.mocked(mockBaseLlmClient.generateJson).mock
       .calls[0][0];
@@ -250,9 +323,9 @@ describe('ClassifierStrategy', () => {
 
   it('should use a fallback promptId if not found in context', async () => {
     const consoleWarnSpy = vi
-      .spyOn(console, 'warn')
+      .spyOn(debugLogger, 'warn')
       .mockImplementation(() => {});
-    vi.mocked(promptIdContext.getStore).mockReturnValue(undefined);
+    vi.spyOn(promptIdContext, 'getStore').mockReturnValue(undefined);
     const mockApiResponse = {
       reasoning: 'Simple.',
       model_choice: 'flash',
@@ -261,7 +334,12 @@ describe('ClassifierStrategy', () => {
       mockApiResponse,
     );
 
-    await strategy.route(mockContext, mockConfig, mockBaseLlmClient);
+    await strategy.route(
+      mockContext,
+      mockConfig,
+      mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
+    );
 
     const generateJsonCall = vi.mocked(mockBaseLlmClient.generateJson).mock
       .calls[0][0];
@@ -271,9 +349,83 @@ describe('ClassifierStrategy', () => {
     );
     expect(consoleWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Could not find promptId in context. This is unexpected. Using a fallback ID:',
+        'Could not find promptId in context for classifier-router. This is unexpected. Using a fallback ID:',
       ),
     );
     consoleWarnSpy.mockRestore();
+  });
+
+  it('should respect requestedModel from context in resolveClassifierModel', async () => {
+    const requestedModel = DEFAULT_GEMINI_MODEL; // Pro model
+    const mockApiResponse = {
+      reasoning: 'Choice is flash',
+      model_choice: 'flash',
+    };
+    vi.mocked(mockBaseLlmClient.generateJson).mockResolvedValue(
+      mockApiResponse,
+    );
+
+    const contextWithRequestedModel = {
+      ...mockContext,
+      requestedModel,
+    } as RoutingContext;
+
+    const decision = await strategy.route(
+      contextWithRequestedModel,
+      mockConfig,
+      mockBaseLlmClient,
+      mockLocalLiteRtLmClient,
+    );
+
+    expect(decision).not.toBeNull();
+    // Since requestedModel is Pro, and choice is flash, it should resolve to Flash
+    expect(decision?.model).toBe(DEFAULT_GEMINI_FLASH_MODEL);
+  });
+
+  describe('Gemini 3.1 and Custom Tools Routing', () => {
+    it('should route to PREVIEW_GEMINI_3_1_MODEL when Gemini 3.1 is launched', async () => {
+      vi.mocked(mockConfig.getGemini31Launched).mockResolvedValue(true);
+      vi.mocked(mockConfig.getModel).mockReturnValue(PREVIEW_GEMINI_MODEL_AUTO);
+      const mockApiResponse = {
+        reasoning: 'Complex task',
+        model_choice: 'pro',
+      };
+      vi.mocked(mockBaseLlmClient.generateJson).mockResolvedValue(
+        mockApiResponse,
+      );
+
+      const decision = await strategy.route(
+        mockContext,
+        mockConfig,
+        mockBaseLlmClient,
+        mockLocalLiteRtLmClient,
+      );
+
+      expect(decision?.model).toBe(PREVIEW_GEMINI_3_1_MODEL);
+    });
+
+    it('should route to PREVIEW_GEMINI_3_1_CUSTOM_TOOLS_MODEL when Gemini 3.1 is launched and auth is USE_GEMINI', async () => {
+      vi.mocked(mockConfig.getGemini31Launched).mockResolvedValue(true);
+      vi.mocked(mockConfig.getModel).mockReturnValue(PREVIEW_GEMINI_MODEL_AUTO);
+      vi.mocked(mockConfig.getContentGeneratorConfig).mockReturnValue({
+        authType: AuthType.USE_GEMINI,
+      });
+      const mockApiResponse = {
+        reasoning: 'Complex task',
+        model_choice: 'pro',
+      };
+      vi.mocked(mockBaseLlmClient.generateJson).mockResolvedValue(
+        mockApiResponse,
+      );
+
+      const decision = await strategy.route(
+        mockContext,
+        mockConfig,
+        mockBaseLlmClient,
+        mockLocalLiteRtLmClient,
+      );
+
+      expect(decision?.model).toBe(PREVIEW_GEMINI_3_1_CUSTOM_TOOLS_MODEL);
+    });
   });
 });

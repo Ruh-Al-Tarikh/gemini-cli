@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { EditorType } from '../utils/editor.js';
-import { openDiff } from '../utils/editor.js';
+import { openDiff, type EditorType } from '../utils/editor.js';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -176,7 +175,6 @@ export async function modifyWithEditor<ToolParams>(
   modifyContext: ModifyContext<ToolParams>,
   editorType: EditorType,
   _abortSignal: AbortSignal,
-  onEditorClose: () => void,
   overrides?: ModifyContentOverrides,
 ): Promise<ModifyResult<ToolParams>> {
   const hasCurrentOverride =
@@ -185,11 +183,11 @@ export async function modifyWithEditor<ToolParams>(
     overrides !== undefined && 'proposedContent' in overrides;
 
   const currentContent = hasCurrentOverride
-    ? (overrides!.currentContent ?? '')
+    ? (overrides.currentContent ?? '')
     : await modifyContext.getCurrentContent(originalParams);
 
   const proposedContent = hasProposedOverride
-    ? (overrides!.proposedContent ?? '')
+    ? (overrides.proposedContent ?? '')
     : await modifyContext.getProposedContent(originalParams);
 
   const { oldPath, newPath, dirPath } = createTempFilesForModify(
@@ -199,7 +197,7 @@ export async function modifyWithEditor<ToolParams>(
   );
 
   try {
-    await openDiff(oldPath, newPath, editorType, onEditorClose);
+    await openDiff(oldPath, newPath, editorType);
     const result = getUpdatedParams(
       oldPath,
       newPath,
